@@ -10,7 +10,6 @@ automake_version := 1.16.1
 automake_api_version := 1.16
 libtool_version := 2.4.6
 gettext_version := 0.19.8.1
-pkg_config_version := 0.29.2
 
 
 build_platform := $(shell uname -s | tr '[A-Z]' '[a-z]' | sed 's,^darwin$$,macos,')
@@ -75,7 +74,7 @@ endif
 
 all: build/toolchain-$(host_platform)-$(host_arch).tar.bz2
 	@echo ""
-	@echo -e "\033[0;32mSuccess!\033[0;39m Here's your toolchain: \033[1m$<\033[0m"
+	@echo "\033[0;32mSuccess!\033[0;39m Here's your toolchain: \033[1m$<\033[0m"
 	@echo ""
 	@echo "It will be picked up automatically if you now proceed to build Frida."
 	@echo ""
@@ -125,17 +124,19 @@ build/ft-tmp-%/.package-stamp: \
 			mv $$tool $$tool-$(automake_api_version); \
 			ln -s $$tool-$(automake_api_version) $$tool; \
 		done
-ifeq ($(build_platform), linux)
-		find $(abspath $(@D)/package)/bin -type f -exec sed -i'' -e "s_^#!.*python.*_#!/usr/bin/env python3_gi" {} +
-endif
-ifeq ($(build_platform), macos)
-		LC_CTYPE=C find $(abspath $(@D)/package)/bin -type f -exec sed -i '' -e "s_^#\!.*python.*_#\!/usr/bin/env python3_g" {} +
-endif
 	. $< \
-		&& for f in $(@D)/package/bin/* $(@D)/package/lib/gettext/* $(@D)/package/lib/vala-*/*; do \
-			if ! [ -L $$f ] && file -b --mime-type $$f | egrep -q "^application"; then \
+		&& for f in $(@D)/package/bin/*; do \
+			if [ -L $$f ]; then \
+				true; \
+			elif file -b --mime-type $$f | egrep -q "^application"; then \
 				$$STRIP $(strip_all) $$f || exit 1; \
-			fi \
+			else \
+				if [ $(build_platform) = macos ]; then \
+					sed -i "" -e "s_^#\!.*python.*_#\!/usr/bin/env python3_g" $$f || exit 1; \
+				else \
+					sed -i"" -e "s_^#!.*python.*_#!/usr/bin/env python3_gi" $$f || exit 1; \
+				fi; \
+			fi; \
 		done
 	releng/relocatify.sh $(@D)/package $(abspath build/ft-$*)
 	@touch $@
@@ -236,9 +237,13 @@ build/ft-%/bin/libtool: build/ft-env-%.rc build/ft-tmp-%/libtool/Makefile
 
 $(eval $(call make-tarball-module-rules,gettext,https://gnuftp.uib.no/gettext/gettext-$(gettext_version).tar.gz,build/ft-%/bin/autopoint,build/ft-%/bin/libtool,gettext-vasnprintf-apple-fix.patch))
 
-$(eval $(call make-git-meson-module-rules,glib,build/ft-%/bin/glib-genmarshal,build/ft-%/bin/autopoint,$(glib_iconv_option) -Dinternal_pcre=true -Dtests=false))
+$(eval $(call make-git-meson-module-rules,zlib,build/ft-%/lib/pkgconfig/zlib.pc,))
 
-$(eval $(call make-tarball-module-rules,pkg-config,https://pkgconfig.freedesktop.org/releases/pkg-config-$(pkg_config_version).tar.gz,build/ft-%/bin/pkg-config,build/ft-%/bin/glib-genmarshal,pkg-config-static-glib.patch))
+$(eval $(call make-git-meson-module-rules,libffi,build/ft-%/lib/pkgconfig/libffi.pc,,))
+
+$(eval $(call make-git-meson-module-rules,glib,build/ft-%/bin/glib-genmarshal,build/ft-%/bin/autopoint build/ft-%/lib/pkgconfig/zlib.pc build/ft-%/lib/pkgconfig/libffi.pc,$(glib_iconv_option) -Dselinux=false -Dxattr=false -Dlibmount=false -Dinternal_pcre=true -Dtests=false))
+
+$(eval $(call make-git-meson-module-rules,pkg-config,build/ft-%/bin/pkg-config,build/ft-%/bin/glib-genmarshal,))
 
 $(eval $(call make-git-meson-module-rules,vala,build/ft-%/bin/valac,build/ft-%/bin/glib-genmarshal,))
 

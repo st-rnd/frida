@@ -1,11 +1,7 @@
 #!/bin/bash
 
 # This wrapper script is necessary in order to avoid polluting the build
-# systems with Android-specific quirks to:
-# - Skip -D_FILE_OFFSET_BITS=64, which is still broken in r15c. It results in
-#   mmap() declaration getting omitted when building for older platform levels.
-# - Add -Wl,-pie when linking programs.
-# - Clean up the ELF files to avoid dynamic linker warnings at runtime.
+# systems with Android-specific quirks.
 
 output_type=executable
 output_path=
@@ -15,35 +11,27 @@ while [[ $# > 0 ]]; do
   arg="$1"
 
   case "$arg" in
-    *-D_FILE_OFFSET_BITS=64*)
-      shift
+    -E)
+      output_type=code
       ;;
-    *)
-      case "$arg" in
-        -E)
-          output_type=code
-          ;;
-        -c)
-          output_type=object
-          ;;
-        -shared)
-          output_type=shlib
-          ;;
-        -o)
-          argv+=("-o")
-          shift
-
-          arg="$1"
-
-          output_path="$arg"
-          ;;
-      esac
-
-      argv+=("$arg")
+    -c)
+      output_type=object
+      ;;
+    -shared)
+      output_type=shlib
+      ;;
+    -o)
+      argv+=("-o")
       shift
 
+      arg="$1"
+
+      output_path="$arg"
       ;;
   esac
+
+  argv+=("$arg")
+  shift
 done
 
 if [[ $output_type = executable ]]; then

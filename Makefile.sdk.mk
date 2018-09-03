@@ -90,12 +90,12 @@ ifeq ($(enable_diet), 0)
 endif
 
 ifneq ($(iconv),)
-	glib_iconv_option := -Diconv=native
+	glib_iconv_option := -Diconv=gnu
 endif
 
 all: build/sdk-$(host_platform)-$(host_arch).tar.bz2
 	@echo ""
-	@echo -e "\033[0;32mSuccess!\033[0;39m Here's your SDK: \033[1m$<\033[0m"
+	@echo "\033[0;32mSuccess!\033[0;39m Here's your SDK: \033[1m$<\033[0m"
 	@echo ""
 	@echo "It will be picked up automatically if you now proceed to build Frida."
 	@echo ""
@@ -220,17 +220,16 @@ build/.libdwarf-stamp:
 build/fs-tmp-%/libdwarf/Makefile: build/fs-env-%.rc build/.libdwarf-stamp build/fs-%/lib/libelf.a
 	$(RM) -r $(@D)
 	mkdir -p $(@D)
-	. $< && cd $(@D) && ../../../libdwarf/libdwarf/configure
+	. $< && cd $(@D) && ../../../libdwarf/configure
 
 build/fs-%/lib/libdwarf.a: build/fs-env-%.rc build/fs-tmp-%/libdwarf/Makefile
 	. $< \
-		&& cd build/fs-tmp-$*/libdwarf \
-		&& make $(MAKE_J) HOSTCC="gcc" HOSTCFLAGS="" HOSTLDFLAGS="" libdwarf.a
+		&& make $(MAKE_J) -C build/fs-tmp-$*/libdwarf/libdwarf libdwarf.la
 	install -d build/fs-$*/include
 	install -m 644 libdwarf/libdwarf/dwarf.h build/fs-$*/include
-	install -m 644 build/fs-tmp-$*/libdwarf/libdwarf.h build/fs-$*/include
+	install -m 644 libdwarf/libdwarf/libdwarf.h build/fs-$*/include
 	install -d build/fs-$*/lib
-	install -m 644 build/fs-tmp-$*/libdwarf/libdwarf.a build/fs-$*/lib
+	install -m 644 build/fs-tmp-$*/libdwarf/libdwarf/.libs/libdwarf.a build/fs-$*/lib
 	@touch $@
 
 
@@ -301,7 +300,7 @@ $(eval $(call make-git-autotools-module-rules,libunwind,build/fs-%/lib/pkgconfig
 
 $(eval $(call make-git-meson-module-rules,libffi,build/fs-%/lib/pkgconfig/libffi.pc,,))
 
-$(eval $(call make-git-meson-module-rules,glib,build/fs-%/lib/pkgconfig/glib-2.0.pc,$(iconv) build/fs-%/lib/pkgconfig/zlib.pc build/fs-%/lib/pkgconfig/libffi.pc,$(glib_iconv_option) -Dinternal_pcre=true -Dtests=false))
+$(eval $(call make-git-meson-module-rules,glib,build/fs-%/lib/pkgconfig/glib-2.0.pc,$(iconv) build/fs-%/lib/pkgconfig/zlib.pc build/fs-%/lib/pkgconfig/libffi.pc,$(glib_iconv_option) -Dselinux=false -Dxattr=false -Dlibmount=false -Dinternal_pcre=true -Dtests=false))
 
 build/.openssl-stamp:
 	$(RM) -r openssl
@@ -353,6 +352,7 @@ v8_common_args := \
 	is_debug=false \
 	v8_enable_v8_checks=false \
 	symbol_level=0 \
+	use_thin_lto=false \
 	v8_monolithic=true \
 	v8_use_external_startup_data=false \
 	is_component_build=false \
@@ -360,49 +360,88 @@ v8_common_args := \
 	v8_enable_disassembler=false \
 	v8_enable_gdbjit=false \
 	v8_enable_i18n_support=false \
+	v8_untrusted_code_mitigations=false \
 	strip_absolute_paths_from_debug_symbols=true \
 	use_goma=false \
 	v8_embedder_string="-frida" \
 	$(NULL)
 
+ifneq ($(host_arch), x86_64)
+v8_arch_args := v8_enable_embedded_builtins=false
+endif
+
 ifeq ($(host_arch), x86)
-	v8_cpu := ia32
+	v8_cpu := x86
 endif
 ifeq ($(host_arch), x86_64)
 	v8_cpu := x64
 endif
 ifeq ($(host_arch), arm)
 	v8_cpu := arm
-	v8_abi_args := arm_float_abi="softfp"
+	v8_cpu_args := arm_version=7 arm_fpu="vfpv3-d16" arm_float_abi="softfp"
 endif
 ifeq ($(host_arch), armeabi)
 	v8_cpu := arm
-	v8_abi_args := arm_float_abi="softfp"
+	v8_cpu_args := arm_version=7 arm_fpu="vfpv3-d16" arm_float_abi="softfp"
 endif
 ifeq ($(host_arch), armhf)
 	v8_cpu := arm
-	v8_abi_args := arm_float_abi="hard"
+	v8_cpu_args := arm_version=7 arm_fpu="vfpv3-d16" arm_float_abi="hard"
 endif
 ifeq ($(host_arch), arm64)
 	v8_cpu := arm64
 endif
 
 v8_build_platform := $(shell echo $(build_platform) | sed 's,^macos$$,mac,')
-ifeq ($(build_platform), macos)
-	v8_platform_args := use_xcode_clang=true
-endif
 ifeq ($(host_platform), macos)
-	v8_platform_args := mac_deployment_target="10.9.0"
+	v8_os := mac
+	v8_platform_args := \
+		use_xcode_clang=true \
+		mac_deployment_target="10.9.0"
 endif
 ifeq ($(host_platform), ios)
-	v8_platform_args := mac_deployment_target="10.9.0" ios_deployment_target="7.0"
+	v8_os := ios
+	v8_platform_args := \
+		use_xcode_clang=true \
+		mac_deployment_target="10.9.0" \
+		ios_deployment_target="7.0"
 endif
 ifeq ($(host_platform), linux)
+	v8_os := linux
+	v8_platform_args := \
+		is_clang=false \
+		is_cfi=false \
+		treat_warnings_as_errors=false \
+		use_sysroot=false \
+		use_custom_libcxx=false \
+		linux_use_bundled_binutils=false \
+		use_gold=false
 	v8_libs_private := "-lrt"
 endif
 ifeq ($(host_platform), android)
+	v8_os := android
+	v8_platform_args := \
+		android_ndk_root="$(ANDROID_NDK_ROOT)" \
+		android_ndk_version="r17b" \
+		android_ndk_major_version=17 \
+		android32_ndk_api_level=14 \
+		android64_ndk_api_level=21
 	v8_libs_private := "-llog -lm"
 endif
+
+gn:
+	# Google's prebuilt GN requires a newer glibc than our Debian Squeeze buildroot has.
+	git clone $(repo_base_url)/gn$(repo_suffix)
+
+build/fs-tmp-%/gn/build.ninja: build/fs-env-%.rc gn
+	. $< \
+		&& CC="$$CC" CXX="$$CXX" python gn/build/gen.py \
+			--no-sysroot \
+			--out-path $(abspath $(@D))
+
+build/fs-tmp-%/gn/gn: build/fs-tmp-%/gn/build.ninja
+	$(NINJA) -C build/fs-tmp-$*/gn
+	@touch $@
 
 v8-checkout/depot_tools/gclient:
 	$(RM) -r v8-checkout/depot_tools
@@ -426,8 +465,11 @@ v8-checkout/v8: v8-checkout/.gclient
 		&& gclient sync
 	@touch $@
 
-build/fs-tmp-%/v8/build.ninja: v8-checkout/v8
-	cd v8-checkout/v8 && ../depot_tools/gn gen $(abspath $(@D)) --args='target_cpu="$(v8_cpu)" $(v8_abi_args) $(v8_common_args) $(v8_platform_args)'
+build/fs-tmp-%/v8/build.ninja: v8-checkout/v8 build/fs-tmp-$(build_platform_arch)/gn/gn
+	cd v8-checkout/v8 \
+		&& ../../build/fs-tmp-$(build_platform_arch)/gn/gn \
+			gen $(abspath $(@D)) \
+			--args='target_os="$(v8_os)" target_cpu="$(v8_cpu)" $(v8_cpu_args) $(v8_common_args) $(v8_arch_args) $(v8_platform_args)'
 
 build/fs-tmp-%/v8/obj/libv8_monolith.a: build/fs-tmp-%/v8/build.ninja
 	$(NINJA) -C build/fs-tmp-$*/v8 v8_monolith
@@ -449,7 +491,7 @@ build/fs-%/lib/pkgconfig/v8-$(v8_api_version).pc: build/fs-tmp-%/v8/obj/libv8_mo
 	echo "" >> $@.tmp
 	echo "Name: V8" >> $@.tmp
 	echo "Description: V8 JavaScript Engine" >> $@.tmp
-	echo "Version: 7.0.242" >> $@.tmp
+	echo "Version: $$(python releng/v8.py v8-checkout/v8 version)" >> $@.tmp
 	echo "Libs: -L\$${libdir} -lv8-$(v8_api_version)" >> $@.tmp
 ifdef v8_libs_private
 	echo Libs.private: $(v8_libs_private) >> $@.tmp
